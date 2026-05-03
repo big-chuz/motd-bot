@@ -1,6 +1,6 @@
 # MotdBot
 
-Paper plugin that pulls messages from a Discord channel (e.g. `quotes-with-no-proof`)
+Paper plugin that pulls messages from a Discord channel (e.g. `quotes`)
 and shows a random one as the server MOTD on every server-list ping.
 
 ## Build
@@ -30,7 +30,7 @@ The plugin jar lands at `build/libs/motd-bot-0.1.0.jar`.
    `View Channel` + `Read Message History`. Open the generated URL and invite the
    bot to your Discord server.
 5. In Discord, enable Developer Mode (Settings → Advanced), right-click the
-   `quotes-with-no-proof` channel, and choose **Copy Channel ID**.
+   `quotes` channel, and choose **Copy Channel ID**.
 
 ## Install
 
