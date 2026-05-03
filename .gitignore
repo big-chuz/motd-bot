@@ -37,3 +37,8 @@ replay_pid*.log
 **/*.token
 **/*.pem
 **/*.key
+
+# Agent / LLM operating notes — local-only, not part of the public repo
+CLAUDE.md
+COWORK_INSTRUCTIONS.md
+.claude/
