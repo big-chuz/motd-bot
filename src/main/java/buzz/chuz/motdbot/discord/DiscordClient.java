@@ -167,8 +167,7 @@ public final class DiscordClient {
             }
             Quote quote = q.get();
             if (quote.attribution().isEmpty() && i + 1 < buffer.size()) {
-                Optional<String> nextAttr = parser.parseAttributionOnly(
-                        buffer.get(i + 1).getContentDisplay());
+                Optional<String> nextAttr = parser.parseAttributionOnly(buffer.get(i + 1));
                 if (nextAttr.isPresent()) {
                     quote = new Quote(quote.id(), quote.text(), nextAttr);
                 }
@@ -209,7 +208,7 @@ public final class DiscordClient {
 
     private Optional<Quote> tryBuildQuote(Message m) {
         if (!basicAccept(m)) return Optional.empty();
-        ParsedQuote parsed = parser.parse(m.getContentDisplay());
+        ParsedQuote parsed = parser.parse(m);
         if (!parsed.isUsable()) return Optional.empty();
         return Optional.of(new Quote(m.getId(), parsed.quote(), parsed.attribution()));
     }
@@ -233,7 +232,7 @@ public final class DiscordClient {
             // running normal quote parsing.
             String pending = pendingUnattributedId;
             if (pending != null) {
-                Optional<String> attrOnly = parser.parseAttributionOnly(m.getContentDisplay());
+                Optional<String> attrOnly = parser.parseAttributionOnly(m);
                 if (attrOnly.isPresent()) {
                     cache.setAttribution(pending, attrOnly);
                     pendingUnattributedId = null;

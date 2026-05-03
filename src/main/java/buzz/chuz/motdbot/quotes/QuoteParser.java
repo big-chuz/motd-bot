@@ -1,8 +1,12 @@
 package buzz.chuz.motdbot.quotes;
 
 import buzz.chuz.motdbot.config.PluginConfig;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.User;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -52,23 +56,41 @@ public final class QuoteParser {
      * (e.g. {@code "-bolb"}, {@code "— Harri"}). Used to pair the next message
      * after an unattributed quote with that quote's author.
      *
-     * Aliases are applied to the result.
+     * Aliases are applied to the result. Prefer {@link #parseAttributionOnly(Message)}
+     * when a Message is available so alias keys can match server nicknames OR
+     * usernames of any mentioned user.
      */
     public Optional<String> parseAttributionOnly(String raw) {
+        return parseAttributionOnlyInternal(raw, null);
+    }
+
+    public Optional<String> parseAttributionOnly(Message message) {
+        if (message == null) return Optional.empty();
+        return parseAttributionOnlyInternal(message.getContentDisplay(), message);
+    }
+
+    private Optional<String> parseAttributionOnlyInternal(String raw, Message context) {
         if (raw == null) return Optional.empty();
         String text = stripDiscordNoise(raw).strip();
         if (text.isEmpty() || text.length() > 50) return Optional.empty();
-        // Single-line, dash-prefixed, short. The length cap rejects things like
-        // "- this is some other thought I had" while keeping real attributions.
         if (text.indexOf('\n') >= 0) return Optional.empty();
         Matcher m = ATTRIBUTION_LINE.matcher(text);
         if (!m.matches()) return Optional.empty();
         String cleaned = cleanAttribution(m.group(1));
         if (cleaned.isBlank() || cleaned.length() > 30) return Optional.empty();
-        return Optional.of(config.aliasFor(cleaned).orElse(cleaned));
+        return Optional.of(applyAlias(cleaned, context));
     }
 
     public ParsedQuote parse(String raw) {
+        return parseInternal(raw, null);
+    }
+
+    public ParsedQuote parse(Message message) {
+        if (message == null) return ParsedQuote.empty();
+        return parseInternal(message.getContentDisplay(), message);
+    }
+
+    private ParsedQuote parseInternal(String raw, Message context) {
         if (raw == null) return ParsedQuote.empty();
         String text = stripDiscordNoise(raw).strip();
         if (text.isEmpty()) return ParsedQuote.empty();
@@ -101,6 +123,12 @@ public final class QuoteParser {
         String quoteBody = joined.body();
         if (quoteBody.isBlank()) return ParsedQuote.empty();
 
+        // Multi-segment dialog (e.g. three back-to-back quoted lines joined with " / ")
+        // tends to render as an unreadable mess in the MOTD — reject by default.
+        if (!config.allowMultiSegment() && joined.segmentCount() > 1) {
+            return ParsedQuote.empty();
+        }
+
         // require-quote-marks must check the ORIGINAL input, not the body that
         // joinQuoteLines returns — because joinQuoteLines strips the quote
         // marks during extraction, so the body never has them. Use the flag
@@ -113,9 +141,38 @@ public final class QuoteParser {
         Optional<String> cleanedAttribution = attribution
                 .map(QuoteParser::cleanAttribution)
                 .filter(s -> !s.isBlank())
-                .map(name -> config.aliasFor(name).orElse(name));
+                .map(name -> applyAlias(name, context));
 
         return new ParsedQuote(stripOuterQuotes(quoteBody), cleanedAttribution);
+    }
+
+    /**
+     * Looks up an alias for {@code captured}. If a Message context is provided,
+     * also tries alias keys against the server nickname / global name / username
+     * of every user mentioned in the message. This lets a single alias entry
+     * keyed on any one of those forms match all of them.
+     */
+    private String applyAlias(String captured, Message context) {
+        Optional<String> direct = config.aliasFor(captured);
+        if (direct.isPresent()) return direct.get();
+        if (context != null) {
+            for (Member member : context.getMentions().getMembers()) {
+                for (String candidate : alternativeNames(member)) {
+                    Optional<String> hit = config.aliasFor(candidate);
+                    if (hit.isPresent()) return hit.get();
+                }
+            }
+        }
+        return captured;
+    }
+
+    private static List<String> alternativeNames(Member member) {
+        User user = member.getUser();
+        return Arrays.asList(
+                member.getEffectiveName(),    // server nickname, falls back to global name
+                user.getEffectiveName(),      // global display name, falls back to username
+                user.getName()                // raw Discord username
+        );
     }
 
     /**
@@ -123,21 +180,23 @@ public final class QuoteParser {
      * both the cleaned body and whether the body was extracted from inside
      * quote marks (so the require-quote-marks check has accurate info).
      */
-    private record JoinedBody(String body, boolean foundQuoteMarks) {}
+    private record JoinedBody(String body, boolean foundQuoteMarks, int segmentCount) {}
 
     private static JoinedBody joinQuoteLines(List<String> lines) {
-        if (lines.isEmpty()) return new JoinedBody("", false);
+        if (lines.isEmpty()) return new JoinedBody("", false, 0);
         // Prefer to use only the actually-quoted segments if any exist; otherwise join all lines.
         StringBuilder quoted = new StringBuilder();
+        int segments = 0;
         for (String line : lines) {
             Matcher m = QUOTED_SEGMENT.matcher(line);
             while (m.find()) {
                 if (quoted.length() > 0) quoted.append(" / ");
                 quoted.append(m.group(1).strip());
+                segments++;
             }
         }
         if (quoted.length() > 0) {
-            return new JoinedBody(quoted.toString(), true);
+            return new JoinedBody(quoted.toString(), true, segments);
         }
         // Fallback: no quoted segments matched. Surface whether the original
         // input had ANY quote-mark characters so requireQuoteMarks can still
@@ -149,7 +208,7 @@ public final class QuoteParser {
                 break;
             }
         }
-        return new JoinedBody(String.join(" ", lines).strip(), anyQuoteCharsInOriginal);
+        return new JoinedBody(String.join(" ", lines).strip(), anyQuoteCharsInOriginal, 0);
     }
 
     private static String cleanAttribution(String raw) {

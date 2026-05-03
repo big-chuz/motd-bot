@@ -19,6 +19,7 @@ filtering:
   ignore-attachments-only: true
   ignore-image-only: true        # skip messages whose only content is an image (no quoted text)
   require-quote-marks: true      # only cache messages that contain a "quoted" string
+  allow-multi-segment: false     # if false, reject messages with multiple "..." segments (multi-line dialog)
   min-length: 2
 
 # Map Discord display names (case-insensitive) to friendly aliases used in the

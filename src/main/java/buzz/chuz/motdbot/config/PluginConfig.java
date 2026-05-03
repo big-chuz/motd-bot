@@ -27,6 +27,7 @@ public final class PluginConfig {
     private final boolean ignoreAttachmentsOnly;
     private final boolean ignoreImageOnly;
     private final boolean requireQuoteMarks;
+    private final boolean allowMultiSegment;
     private final int minLength;
 
     /** Lower-cased Discord display name → friendly alias. */
@@ -48,6 +49,7 @@ public final class PluginConfig {
         this.ignoreAttachmentsOnly = b.ignoreAttachmentsOnly;
         this.ignoreImageOnly = b.ignoreImageOnly;
         this.requireQuoteMarks = b.requireQuoteMarks;
+        this.allowMultiSegment = b.allowMultiSegment;
         this.minLength = b.minLength;
         this.aliases = Map.copyOf(b.aliases);
     }
@@ -72,6 +74,7 @@ public final class PluginConfig {
         b.ignoreAttachmentsOnly = cfg.getBoolean("filtering.ignore-attachments-only", true);
         b.ignoreImageOnly = cfg.getBoolean("filtering.ignore-image-only", true);
         b.requireQuoteMarks = cfg.getBoolean("filtering.require-quote-marks", true);
+        b.allowMultiSegment = cfg.getBoolean("filtering.allow-multi-segment", false);
         b.minLength = Math.max(0, cfg.getInt("filtering.min-length", 2));
 
         ConfigurationSection aliasSection = cfg.getConfigurationSection("aliases");
@@ -113,6 +116,7 @@ public final class PluginConfig {
     public boolean ignoreAttachmentsOnly()  { return ignoreAttachmentsOnly; }
     public boolean ignoreImageOnly()        { return ignoreImageOnly; }
     public boolean requireQuoteMarks()      { return requireQuoteMarks; }
+    public boolean allowMultiSegment()      { return allowMultiSegment; }
     public int minLength()                  { return minLength; }
 
     private static long parseLong(String s) {
@@ -148,6 +152,7 @@ public final class PluginConfig {
         boolean ignoreAttachmentsOnly;
         boolean ignoreImageOnly;
         boolean requireQuoteMarks;
+        boolean allowMultiSegment;
         int minLength;
         Map<String, String> aliases = new TreeMap<>();
     }
