@@ -18,6 +18,10 @@ public final class PluginConfig {
     private final String fallbackMotd;
     private final String quoteColor;
     private final String attributionColor;
+    private final boolean bold;
+    private final boolean randomColor;
+    private final double rainbowChance;
+    private final String palette;
 
     private final boolean ignoreBots;
     private final boolean ignoreAttachmentsOnly;
@@ -36,6 +40,10 @@ public final class PluginConfig {
         this.fallbackMotd = b.fallbackMotd;
         this.quoteColor = b.quoteColor;
         this.attributionColor = b.attributionColor;
+        this.bold = b.bold;
+        this.randomColor = b.randomColor;
+        this.rainbowChance = b.rainbowChance;
+        this.palette = b.palette;
         this.ignoreBots = b.ignoreBots;
         this.ignoreAttachmentsOnly = b.ignoreAttachmentsOnly;
         this.ignoreImageOnly = b.ignoreImageOnly;
@@ -54,6 +62,11 @@ public final class PluginConfig {
         b.fallbackMotd = cfg.getString("motd.fallback", "&aA Minecraft Server");
         b.quoteColor = cfg.getString("motd.quote-color", "&f");
         b.attributionColor = cfg.getString("motd.attribution-color", "&7");
+        b.bold = cfg.getBoolean("motd.bold", true);
+        b.randomColor = cfg.getBoolean("motd.random-color", true);
+        b.rainbowChance = clamp01(cfg.getDouble("motd.rainbow-chance", 0.15));
+        String pal = cfg.getString("motd.palette", "c6eab9d5");
+        b.palette = pal == null || pal.isBlank() ? "f" : pal;
 
         b.ignoreBots = cfg.getBoolean("filtering.ignore-bots", true);
         b.ignoreAttachmentsOnly = cfg.getBoolean("filtering.ignore-attachments-only", true);
@@ -92,6 +105,10 @@ public final class PluginConfig {
     public String fallbackMotd()            { return fallbackMotd; }
     public String quoteColor()              { return quoteColor; }
     public String attributionColor()        { return attributionColor; }
+    public boolean bold()                   { return bold; }
+    public boolean randomColor()            { return randomColor; }
+    public double rainbowChance()           { return rainbowChance; }
+    public String palette()                 { return palette; }
     public boolean ignoreBots()             { return ignoreBots; }
     public boolean ignoreAttachmentsOnly()  { return ignoreAttachmentsOnly; }
     public boolean ignoreImageOnly()        { return ignoreImageOnly; }
@@ -110,6 +127,11 @@ public final class PluginConfig {
         return Math.max(lo, Math.min(hi, v));
     }
 
+    private static double clamp01(double v) {
+        if (Double.isNaN(v)) return 0.0;
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
     private static final class Builder {
         String discordToken;
         long channelId;
@@ -118,6 +140,10 @@ public final class PluginConfig {
         String fallbackMotd;
         String quoteColor;
         String attributionColor;
+        boolean bold;
+        boolean randomColor;
+        double rainbowChance;
+        String palette;
         boolean ignoreBots;
         boolean ignoreAttachmentsOnly;
         boolean ignoreImageOnly;

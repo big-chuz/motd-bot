@@ -23,7 +23,8 @@ jobs:
 
     env:
       PLUGIN_DIR: /opt/minecraft/plugins
-      LIVE_LINK: /opt/minecraft/plugins/motd-bot-current.jar
+      VERSIONS_DIR: /opt/minecraft/plugins/.versions    # versioned jars live here, hidden from Paper's plugin scan
+      LIVE_LINK: /opt/minecraft/plugins/motd-bot-current.jar    # the only motd-bot file Paper sees; symlink into .versions/
       STAGING_DIR: /opt/minecraft/plugins/.staging
       SERVICE: minecraft.service
 
@@ -39,30 +40,48 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download jar from release
+      - name: Wait for build to attach jar to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
+          # Releases publish + build-attach-jar happen in two separate workflows
+          # that fire from the same UI click. Poll for up to 5 minutes for the
+          # build workflow to finish uploading the jar.
+          if [ "$TAG" = "latest" ]; then
+            api_path="releases/latest"
+          else
+            api_path="releases/tags/$TAG"
+          fi
+          for i in $(seq 1 30); do
+            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/$api_path" \
+              | jq -r '.assets[]? | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url' \
+              | head -1)
+            if [ -n "$asset_url" ] && [ "$asset_url" != "null" ]; then
+              echo "Found jar after ${i} attempt(s): $asset_url"
+              echo "ASSET_URL=$asset_url" >> "$GITHUB_ENV"
+              break
+            fi
+            echo "Waiting for build to upload jar… ($i/30)"
+            sleep 10
+          done
+          if [ -z "${ASSET_URL:-}" ]; then
+            echo "::error::Build never attached a motd-bot jar to release $TAG within 5 minutes"
+            exit 1
+          fi
+
+      - name: Download jar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
           mkdir -p "$STAGING_DIR"
           cd "$STAGING_DIR"
           rm -f motd-bot-*.jar
-          if [ "$TAG" = "latest" ]; then
-            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
-              | jq -r '.assets[] | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url')
-          else
-            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
-              | jq -r '.assets[] | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url')
-          fi
-          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
-            echo "::error::No motd-bot jar attached to release $TAG"
-            exit 1
-          fi
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o motd-bot-new.jar "$asset_url"
-          jar_name=$(basename "$asset_url")
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o motd-bot-new.jar "$ASSET_URL"
+          jar_name=$(basename "$ASSET_URL")
           mv motd-bot-new.jar "$jar_name"
           echo "JAR_NAME=$jar_name" >> "$GITHUB_ENV"
           ls -lh "$jar_name"
@@ -80,10 +99,14 @@ jobs:
       - name: Install jar + atomic symlink swap
         run: |
           set -euo pipefail
+          # Install the versioned jar into .versions/ (hidden from Paper's
+          # top-level plugin scan), then atomically point the visible
+          # motd-bot-current.jar symlink at the new version. Paper sees one
+          # plugin file, follows the symlink, loads it once.
           sudo /usr/bin/install -m 644 -o minecraft -g minecraft \
-            "$STAGING_DIR/$JAR_NAME" "$PLUGIN_DIR/$JAR_NAME"
-          sudo /bin/ln -sfn "$JAR_NAME" "$LIVE_LINK"
-          ls -lh "$LIVE_LINK"
+            "$STAGING_DIR/$JAR_NAME" "$VERSIONS_DIR/$JAR_NAME"
+          sudo /bin/ln -sfn ".versions/$JAR_NAME" "$LIVE_LINK"
+          ls -lh "$LIVE_LINK" "$VERSIONS_DIR/$JAR_NAME"
 
       - name: Restart minecraft + watch for errors
         id: restart
@@ -123,7 +146,12 @@ jobs:
       - name: Cleanup old jars
         if: success()
         run: |
-          # Keep current + immediately previous version
-          cd "$PLUGIN_DIR"
-          ls -1t motd-bot-*.jar 2>/dev/null | tail -n +3 | xargs -r sudo /bin/rm -f
-          ls -lh motd-bot-*.jar motd-bot-current.jar 2>/dev/null || true
+          # Keep the live version + immediately previous (for rollback safety).
+          cd "$VERSIONS_DIR"
+          ls -1t motd-bot-*.jar 2>/dev/null | tail -n +3 | while read old; do
+            sudo /bin/rm "$VERSIONS_DIR/$old"
+          done
+          echo "--- versions/ ---"
+          ls -lh "$VERSIONS_DIR" || true
+          echo "--- live ---"
+          ls -lh "$LIVE_LINK" || true

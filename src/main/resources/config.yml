@@ -6,8 +6,13 @@ discord:
 motd:
   max-length: 90
   fallback: "&aA Minecraft Server"
-  quote-color: "&f"
+  quote-color: "&f"            # used only when random-color is false
   attribution-color: "&7"
+  bold: true                   # bold the quote text
+  random-color: true           # pick a random color from `palette` each ping
+  rainbow-chance: 0.15         # 0.0–1.0; fraction of pings that go full rainbow
+  palette: "c6eab9d5"          # legacy color code chars used by random + rainbow
+                               # (red gold yellow green aqua blue lightpurple darkpurple)
 
 filtering:
   ignore-bots: true
