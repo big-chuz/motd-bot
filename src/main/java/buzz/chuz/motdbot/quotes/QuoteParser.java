@@ -74,10 +74,16 @@ public final class QuoteParser {
             }
         }
 
-        String quoteBody = joinQuoteLines(lines);
+        JoinedBody joined = joinQuoteLines(lines);
+        String quoteBody = joined.body();
         if (quoteBody.isBlank()) return ParsedQuote.empty();
 
-        if (config.requireQuoteMarks() && !hasQuoteMarks(quoteBody)) {
+        // require-quote-marks must check the ORIGINAL input, not the body that
+        // joinQuoteLines returns — because joinQuoteLines strips the quote
+        // marks during extraction, so the body never has them. Use the flag
+        // joinQuoteLines sets when it actually found and extracted quoted
+        // segments.
+        if (config.requireQuoteMarks() && !joined.foundQuoteMarks()) {
             return ParsedQuote.empty();
         }
 
@@ -89,8 +95,15 @@ public final class QuoteParser {
         return new ParsedQuote(stripOuterQuotes(quoteBody), cleanedAttribution);
     }
 
-    private static String joinQuoteLines(List<String> lines) {
-        if (lines.isEmpty()) return "";
+    /**
+     * Returned from {@link #joinQuoteLines(List)} to tell {@link #parse(String)}
+     * both the cleaned body and whether the body was extracted from inside
+     * quote marks (so the require-quote-marks check has accurate info).
+     */
+    private record JoinedBody(String body, boolean foundQuoteMarks) {}
+
+    private static JoinedBody joinQuoteLines(List<String> lines) {
+        if (lines.isEmpty()) return new JoinedBody("", false);
         // Prefer to use only the actually-quoted segments if any exist; otherwise join all lines.
         StringBuilder quoted = new StringBuilder();
         for (String line : lines) {
@@ -101,9 +114,19 @@ public final class QuoteParser {
             }
         }
         if (quoted.length() > 0) {
-            return quoted.toString();
+            return new JoinedBody(quoted.toString(), true);
         }
-        return String.join(" ", lines).strip();
+        // Fallback: no quoted segments matched. Surface whether the original
+        // input had ANY quote-mark characters so requireQuoteMarks can still
+        // reject obviously-unquoted plain text.
+        boolean anyQuoteCharsInOriginal = false;
+        for (String line : lines) {
+            if (hasQuoteMarks(line)) {
+                anyQuoteCharsInOriginal = true;
+                break;
+            }
+        }
+        return new JoinedBody(String.join(" ", lines).strip(), anyQuoteCharsInOriginal);
     }
 
     private static String cleanAttribution(String raw) {
