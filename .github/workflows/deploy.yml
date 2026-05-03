@@ -1,0 +1,129 @@
+name: deploy
+
+# Triggers only on a published Release. The build workflow attaches the jar
+# to the release; this workflow downloads that jar onto a self-hosted runner
+# living inside CT 104 and swaps it into /opt/minecraft/plugins/.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (e.g. v0.2.0). Leave blank to use the latest release."
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, motd-bot-deploy]
+    concurrency:
+      group: minecraft-deploy
+      cancel-in-progress: false
+
+    env:
+      PLUGIN_DIR: /opt/minecraft/plugins
+      LIVE_LINK: /opt/minecraft/plugins/motd-bot-current.jar
+      STAGING_DIR: /opt/minecraft/plugins/.staging
+      SERVICE: minecraft.service
+
+    steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.release.tag_name }}" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download jar from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$STAGING_DIR"
+          cd "$STAGING_DIR"
+          rm -f motd-bot-*.jar
+          if [ "$TAG" = "latest" ]; then
+            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+              | jq -r '.assets[] | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url')
+          else
+            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+              | jq -r '.assets[] | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url')
+          fi
+          if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
+            echo "::error::No motd-bot jar attached to release $TAG"
+            exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o motd-bot-new.jar "$asset_url"
+          jar_name=$(basename "$asset_url")
+          mv motd-bot-new.jar "$jar_name"
+          echo "JAR_NAME=$jar_name" >> "$GITHUB_ENV"
+          ls -lh "$jar_name"
+
+      - name: Capture current symlink target (for rollback)
+        id: prev
+        run: |
+          if [ -L "$LIVE_LINK" ]; then
+            prev=$(readlink "$LIVE_LINK")
+            echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          else
+            echo "prev=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install jar + atomic symlink swap
+        run: |
+          set -euo pipefail
+          sudo /usr/bin/install -m 644 -o minecraft -g minecraft \
+            "$STAGING_DIR/$JAR_NAME" "$PLUGIN_DIR/$JAR_NAME"
+          sudo /bin/ln -sfn "$JAR_NAME" "$LIVE_LINK"
+          ls -lh "$LIVE_LINK"
+
+      - name: Restart minecraft + watch for errors
+        id: restart
+        run: |
+          set -euo pipefail
+          sudo /bin/systemctl restart "$SERVICE"
+          # Wait for boot to complete (or fail) within 90s
+          deadline=$((SECONDS + 90))
+          ok=0
+          while [ $SECONDS -lt $deadline ]; do
+            if sudo /bin/journalctl -u "$SERVICE" --since "2 min ago" --no-pager | grep -qE 'Done \([0-9.]+s\)'; then
+              ok=1
+              break
+            fi
+            if sudo /bin/journalctl -u "$SERVICE" --since "2 min ago" --no-pager | grep -qiE 'ExceptionInInitializerError|Could not load|Error occurred while enabling MotdBot'; then
+              break
+            fi
+            sleep 3
+          done
+          if [ $ok -eq 1 ]; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+            echo "::error::Server didn't reach 'Done' within 90s OR a fatal error appeared"
+            sudo /bin/journalctl -u "$SERVICE" --since "2 min ago" --no-pager | tail -50
+            exit 1
+          fi
+
+      - name: Rollback on failure
+        if: failure() && steps.prev.outputs.prev != ''
+        run: |
+          set -euo pipefail
+          echo "Rolling back to ${{ steps.prev.outputs.prev }}"
+          sudo /bin/ln -sfn "${{ steps.prev.outputs.prev }}" "$LIVE_LINK"
+          sudo /bin/systemctl restart "$SERVICE"
+
+      - name: Cleanup old jars
+        if: success()
+        run: |
+          # Keep current + immediately previous version
+          cd "$PLUGIN_DIR"
+          ls -1t motd-bot-*.jar 2>/dev/null | tail -n +3 | xargs -r sudo /bin/rm -f
+          ls -lh motd-bot-*.jar motd-bot-current.jar 2>/dev/null || true

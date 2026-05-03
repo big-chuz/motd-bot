@@ -1,0 +1,39 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local server runtime — never commit a populated config or world data
+plugins/MotdBot/config.yml
+*.log
+logs/
+
+# Local-only files
+.env
+.env.local
+local.properties
+hs_err_pid*.log
+replay_pid*.log
+
+# Secrets — defense in depth (config.yml in src/main/resources is a TEMPLATE only)
+**/secrets.yml
+**/*.token
+**/*.pem
+**/*.key

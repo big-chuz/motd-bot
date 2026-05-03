@@ -1,0 +1,7 @@
+name: MotdBot
+main: buzz.chuz.motdbot.MotdBotPlugin
+version: ${version}
+api-version: '1.21'
+load: POSTWORLD
+author: cadair
+description: Pulls quotes from a Discord channel and serves them as the server MOTD.

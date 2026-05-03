@@ -1,0 +1,24 @@
+discord:
+  token: "PUT_YOUR_BOT_TOKEN_HERE"
+  channel-id: "0"
+  initial-fetch-limit: 200
+
+motd:
+  max-length: 90
+  fallback: "&aA Minecraft Server"
+  quote-color: "&f"
+  attribution-color: "&7"
+
+filtering:
+  ignore-bots: true
+  ignore-attachments-only: true
+  ignore-image-only: true        # skip messages whose only content is an image (no quoted text)
+  require-quote-marks: true      # only cache messages that contain a "quoted" string
+  min-length: 2
+
+# Map Discord display names (case-insensitive) to friendly aliases used in the
+# attribution line. Anything not listed falls back to the raw Discord name.
+aliases:
+  "we do not fw Y": "Harri"
+  # "bolb": "Bolb"
+  # "plungie": "Plungie"
