@@ -8,6 +8,7 @@ import buzz.chuz.motdbot.quotes.QuoteParser;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageHistory;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
@@ -88,6 +89,9 @@ public final class DiscordClient {
         jda = null;
     }
 
+    /** JDA's MessageHistory.retrievePast caps at 100 messages per call. */
+    private static final int JDA_PAGE_SIZE = 100;
+
     private void seedCache() {
         TextChannel channel = jda.getTextChannelById(config.channelId());
         if (channel == null) {
@@ -97,10 +101,22 @@ public final class DiscordClient {
             return;
         }
 
-        channel.getHistory().retrievePast(config.initialFetchLimit()).queue(
+        // Walk the channel's history in pages of up to JDA_PAGE_SIZE until we
+        // either hit the configured target or run out of older messages.
+        // Each retrievePast() call on the same MessageHistory advances the
+        // internal cursor backwards, so successive calls yield older pages.
+        MessageHistory history = channel.getHistory();
+        int target = Math.max(1, config.initialFetchLimit());
+        fetchPage(channel, history, target, 0, 0);
+    }
+
+    private void fetchPage(TextChannel channel, MessageHistory history,
+                           int remaining, int addedSoFar, int skippedSoFar) {
+        int chunk = Math.min(remaining, JDA_PAGE_SIZE);
+        history.retrievePast(chunk).queue(
                 messages -> {
-                    int added = 0;
-                    int skipped = 0;
+                    int added = addedSoFar;
+                    int skipped = skippedSoFar;
                     for (Message m : messages) {
                         Optional<Quote> q = tryBuildQuote(m);
                         if (q.isPresent()) {
@@ -110,15 +126,26 @@ public final class DiscordClient {
                             skipped++;
                         }
                     }
-                    logger.info("Cached " + added + " quotes from #" + channel.getName()
-                            + " (skipped " + skipped + " non-quote messages)");
-                    onReady.accept(channel.getName());
+                    int nextRemaining = remaining - messages.size();
+                    boolean ranOutOfHistory = messages.size() < chunk;
+                    if (nextRemaining <= 0 || ranOutOfHistory) {
+                        finishSeed(channel, added, skipped);
+                    } else {
+                        fetchPage(channel, history, nextRemaining, added, skipped);
+                    }
                 },
                 err -> {
                     logger.log(Level.WARNING, "Failed to fetch initial quote history", err);
-                    onReady.accept(channel.getName());
+                    // Whatever we managed to cache before the error is still useful.
+                    finishSeed(channel, addedSoFar, skippedSoFar);
                 }
         );
+    }
+
+    private void finishSeed(TextChannel channel, int added, int skipped) {
+        logger.info("Cached " + added + " quotes from #" + channel.getName()
+                + " (skipped " + skipped + " non-quote messages)");
+        onReady.accept(channel.getName());
     }
 
     private boolean basicAccept(Message m) {
