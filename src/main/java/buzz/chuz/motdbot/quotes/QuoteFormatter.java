@@ -12,12 +12,17 @@ import java.util.regex.Pattern;
  *   "quote text" -Author
  *
  * which is then wrapped across the two MOTD lines if it's too long for one.
- * The whole rendered string is bolded and either painted a single random palette
- * color or rendered as per-character rainbow.
+ *
+ * Color treatment:
+ *   - Quote text is bolded and either painted a single random palette color or
+ *     rendered as per-character rainbow.
+ *   - Attribution text (the trailing " -Author" segment) is always painted in
+ *     {@code motd.attribution-color} regardless of whether the quote went
+ *     rainbow or solid, so the speaker stays visually distinct.
  *
  * Note: in legacy MOTDs a color code resets all formatting, so bold (§l) must be
  * re-emitted after every color change — and line breaks reset formatting too,
- * so the second line gets its own color+bold prefix in solid mode.
+ * so the start of line two gets its own prefix.
  */
 public final class QuoteFormatter {
 
@@ -34,65 +39,78 @@ public final class QuoteFormatter {
 
     public String format(Quote quote) {
         String body = WHITESPACE.matcher(quote.text()).replaceAll(" ").strip();
-        StringBuilder display = new StringBuilder().append('"').append(body).append('"');
-        if (quote.attribution().isPresent()) {
-            display.append(" -").append(quote.attribution().get());
-        }
+        String quotePart = "\"" + body + "\"";
+        String attribPart = quote.attribution().map(a -> " -" + a).orElse("");
+        String raw = quotePart + attribPart;
 
-        String truncated = truncate(display.toString(), config.motdMaxLength());
+        String truncated = truncate(raw, config.motdMaxLength());
+        // Where the attribution starts in the *truncated* string, clamped if
+        // truncation cut the attribution off entirely.
+        int attribStart = Math.min(quotePart.length(), truncated.length());
+
+        // wrapTwoLines is a 1-char-for-1-char substitution (' ' → '\n'), so
+        // indices in the wrapped string still line up with the truncated one.
         String wrapped = wrapTwoLines(truncated, Math.max(10, config.motdMaxLength() / 2));
-        return paint(wrapped);
+        return paint(wrapped, attribStart);
     }
 
     public String fallback() {
         return translate(config.fallbackMotd());
     }
 
-    private String paint(String text) {
+    private String paint(String text, int attribStart) {
         boolean rainbow = config.rainbowChance() > 0.0
                 && ThreadLocalRandom.current().nextDouble() < config.rainbowChance();
-        if (rainbow) {
-            return rainbow(text);
-        }
 
-        String prefix;
-        if (config.randomColor()) {
-            prefix = SECTION + String.valueOf(pickFromPalette()) + boldPrefix();
-        } else {
-            prefix = translate(config.quoteColor()) + boldPrefix();
-        }
-
-        // Color/format resets at line break, so re-prefix line two as well.
-        int nl = text.indexOf('\n');
-        if (nl < 0) {
-            return prefix + text;
-        }
-        return prefix + text.substring(0, nl) + "\n" + prefix + text.substring(nl + 1);
-    }
-
-    private String rainbow(String text) {
         String palette = config.palette();
         if (palette.isEmpty()) palette = "f";
-        StringBuilder sb = new StringBuilder(text.length() * 4);
-        int idx = ThreadLocalRandom.current().nextInt(palette.length());
+
+        // Pick the solid quote color up front so both lines share it in solid mode.
+        String solidQuotePrefix;
+        if (config.randomColor()) {
+            solidQuotePrefix = SECTION + String.valueOf(palette.charAt(
+                    ThreadLocalRandom.current().nextInt(palette.length())));
+        } else {
+            solidQuotePrefix = translate(config.quoteColor());
+        }
+        String attributionPrefix = translate(config.attributionColor());
         String bold = boldPrefix();
+
+        int rainbowIdx = ThreadLocalRandom.current().nextInt(palette.length());
+        StringBuilder out = new StringBuilder(text.length() * 4);
+        boolean atLineStart = true;
+        boolean inAttribution = false;
+
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
             if (ch == '\n') {
-                sb.append('\n');
+                out.append('\n');
+                atLineStart = true;
                 continue;
             }
-            sb.append(SECTION).append(palette.charAt(idx % palette.length())).append(bold).append(ch);
-            // Don't waste a color step on whitespace — keeps the rainbow visible across short words.
-            if (!Character.isWhitespace(ch)) idx++;
-        }
-        return sb.toString();
-    }
+            boolean nowInAttrib = i >= attribStart;
+            boolean needsPrefix = atLineStart
+                    || nowInAttrib != inAttribution
+                    || (rainbow && !nowInAttrib);
 
-    private char pickFromPalette() {
-        String palette = config.palette();
-        if (palette.isEmpty()) return 'f';
-        return palette.charAt(ThreadLocalRandom.current().nextInt(palette.length()));
+            if (needsPrefix) {
+                if (nowInAttrib) {
+                    out.append(attributionPrefix).append(bold);
+                } else if (rainbow) {
+                    out.append(SECTION)
+                       .append(palette.charAt(rainbowIdx % palette.length()))
+                       .append(bold);
+                    if (!Character.isWhitespace(ch)) rainbowIdx++;
+                } else {
+                    out.append(solidQuotePrefix).append(bold);
+                }
+            }
+
+            out.append(ch);
+            atLineStart = false;
+            inAttribution = nowInAttrib;
+        }
+        return out.toString();
     }
 
     private String boldPrefix() {
@@ -105,10 +123,7 @@ public final class QuoteFormatter {
         return s.substring(0, max - 1).stripTrailing() + ELLIPSIS;
     }
 
-    /**
-     * Break {@code s} into two lines at a space near the middle. If it already
-     * fits inside {@code perLineSoftMax} characters we leave it as-is.
-     */
+    /** Break {@code s} into two lines at a space near the middle. */
     private static String wrapTwoLines(String s, int perLineSoftMax) {
         if (s.length() <= perLineSoftMax) return s;
         int target = s.length() / 2;
@@ -123,7 +138,6 @@ public final class QuoteFormatter {
                 return s.substring(0, rightIdx) + "\n" + s.substring(rightIdx + 1);
             }
         }
-        // No space found — leave as one line; client will truncate visually.
         return s;
     }
 

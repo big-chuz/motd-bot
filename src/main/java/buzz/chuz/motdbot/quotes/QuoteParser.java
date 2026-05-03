@@ -27,10 +27,12 @@ public final class QuoteParser {
     private static final Pattern ATTRIBUTION_LINE =
             Pattern.compile("^\\s*[-–—]\\s*(.+?)\\s*$");
 
-    // Inline trailing attribution: "...quote\" - name" near the end of the text.
-    // We require the dash to be space-separated to avoid eating mid-quote dashes.
+    // Inline trailing attribution: "...quote\" - name" or "...quote\" -@name"
+    // near the end of the text. Whitespace is required BEFORE the dash so we
+    // don't eat mid-word hyphens (e.g. "side-eye"), but the trailing space is
+    // optional — Discord users often run the dash straight into an @mention.
     private static final Pattern INLINE_ATTRIBUTION =
-            Pattern.compile("\\s+[-–—]\\s+([^\\n]+?)\\s*$");
+            Pattern.compile("\\s+[-–—]\\s?([^\\n]+?)\\s*$");
 
     private static final char[] OPEN_QUOTES  = {'"', '“', '‟', '«', '‘', '‹'};
     private static final char[] CLOSE_QUOTES = {'"', '”', '„', '»', '’', '›'};
