@@ -54,23 +54,26 @@ jobs:
           else
             api_path="releases/tags/$TAG"
           fi
+          found=""
           for i in $(seq 1 30); do
-            asset_url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
               "https://api.github.com/repos/${{ github.repository }}/$api_path" \
               | jq -r '.assets[]? | select(.name | test("^motd-bot-.*\\.jar$")) | .browser_download_url' \
               | head -1)
-            if [ -n "$asset_url" ] && [ "$asset_url" != "null" ]; then
-              echo "Found jar after ${i} attempt(s): $asset_url"
-              echo "ASSET_URL=$asset_url" >> "$GITHUB_ENV"
+            if [ -n "$url" ] && [ "$url" != "null" ]; then
+              found="$url"
+              echo "Found jar after ${i} attempt(s): $found"
               break
             fi
             echo "Waiting for build to upload jar… ($i/30)"
             sleep 10
           done
-          if [ -z "${ASSET_URL:-}" ]; then
+          if [ -z "$found" ]; then
             echo "::error::Build never attached a motd-bot jar to release $TAG within 5 minutes"
             exit 1
           fi
+          # Only NOW export to GITHUB_ENV (visible to subsequent steps).
+          echo "ASSET_URL=$found" >> "$GITHUB_ENV"
 
       - name: Download jar
         env:
