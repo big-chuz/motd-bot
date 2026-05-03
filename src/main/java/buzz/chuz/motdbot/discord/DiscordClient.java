@@ -21,7 +21,10 @@ import net.dv8tion.jda.api.utils.MemberCachePolicy;
 import net.dv8tion.jda.api.utils.cache.CacheFlag;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -37,6 +40,18 @@ public final class DiscordClient {
     private final Consumer<String> onReady;
 
     private JDA jda;
+
+    /**
+     * ID of the most recently cached quote that has no attribution yet, used by
+     * live look-ahead pairing. If the very next channel message is an
+     * attribution-only line, we'll attach it to this quote. Cleared on every
+     * other message so the pairing window only spans one message.
+     *
+     * Volatile because JDA dispatches events on a worker pool — even though
+     * per-channel events are serialized, write visibility across threads is not
+     * guaranteed without it.
+     */
+    private volatile String pendingUnattributedId;
 
     public DiscordClient(PluginConfig config,
                          QuoteCache cache,
@@ -102,47 +117,76 @@ public final class DiscordClient {
         }
 
         // Walk the channel's history in pages of up to JDA_PAGE_SIZE until we
-        // either hit the configured target or run out of older messages.
-        // Each retrievePast() call on the same MessageHistory advances the
-        // internal cursor backwards, so successive calls yield older pages.
+        // either hit the configured target or run out of older messages. Each
+        // retrievePast() call on the same MessageHistory advances the internal
+        // cursor backwards, so successive calls yield older pages.
+        //
+        // We buffer all pages first, then process chronologically so the
+        // unattributed-quote → attribution-line look-ahead works across page
+        // boundaries.
         MessageHistory history = channel.getHistory();
         int target = Math.max(1, config.initialFetchLimit());
-        fetchPage(channel, history, target, 0, 0);
+        fetchPage(channel, history, target, new ArrayList<>());
     }
 
     private void fetchPage(TextChannel channel, MessageHistory history,
-                           int remaining, int addedSoFar, int skippedSoFar) {
+                           int remaining, List<Message> buffer) {
         int chunk = Math.min(remaining, JDA_PAGE_SIZE);
         history.retrievePast(chunk).queue(
                 messages -> {
-                    int added = addedSoFar;
-                    int skipped = skippedSoFar;
-                    for (Message m : messages) {
-                        Optional<Quote> q = tryBuildQuote(m);
-                        if (q.isPresent()) {
-                            cache.put(q.get());
-                            added++;
-                        } else {
-                            skipped++;
-                        }
-                    }
+                    buffer.addAll(messages);
                     int nextRemaining = remaining - messages.size();
                     boolean ranOutOfHistory = messages.size() < chunk;
                     if (nextRemaining <= 0 || ranOutOfHistory) {
-                        finishSeed(channel, added, skipped);
+                        processSeed(channel, buffer);
                     } else {
-                        fetchPage(channel, history, nextRemaining, added, skipped);
+                        fetchPage(channel, history, nextRemaining, buffer);
                     }
                 },
                 err -> {
                     logger.log(Level.WARNING, "Failed to fetch initial quote history", err);
-                    // Whatever we managed to cache before the error is still useful.
-                    finishSeed(channel, addedSoFar, skippedSoFar);
+                    // Process whatever we managed to fetch so far.
+                    processSeed(channel, buffer);
                 }
         );
     }
 
-    private void finishSeed(TextChannel channel, int added, int skipped) {
+    private void processSeed(TextChannel channel, List<Message> buffer) {
+        // Sort oldest → newest so look-ahead means "the message right after this one".
+        // Snowflake IDs are time-ordered, so sorting by long ID is correct.
+        buffer.sort(Comparator.comparingLong(Message::getIdLong));
+
+        int added = 0;
+        int skipped = 0;
+        for (int i = 0; i < buffer.size(); i++) {
+            Message m = buffer.get(i);
+            Optional<Quote> q = tryBuildQuote(m);
+            if (q.isEmpty()) {
+                skipped++;
+                continue;
+            }
+            Quote quote = q.get();
+            if (quote.attribution().isEmpty() && i + 1 < buffer.size()) {
+                Optional<String> nextAttr = parser.parseAttributionOnly(
+                        buffer.get(i + 1).getContentDisplay());
+                if (nextAttr.isPresent()) {
+                    quote = new Quote(quote.id(), quote.text(), nextAttr);
+                }
+            }
+            cache.put(quote);
+            added++;
+        }
+        // The newest cached message determines the live pairing window's anchor.
+        Quote newestUnattributed = null;
+        for (int i = buffer.size() - 1; i >= 0; i--) {
+            Quote cached = cache.get(buffer.get(i).getId()).orElse(null);
+            if (cached != null) {
+                if (cached.attribution().isEmpty()) newestUnattributed = cached;
+                break;
+            }
+        }
+        pendingUnattributedId = newestUnattributed != null ? newestUnattributed.id() : null;
+
         logger.info("Cached " + added + " quotes from #" + channel.getName()
                 + " (skipped " + skipped + " non-quote messages)");
         onReady.accept(channel.getName());
@@ -179,7 +223,32 @@ public final class DiscordClient {
 
         @Override
         public void onMessageReceived(@NotNull MessageReceivedEvent event) {
-            tryBuildQuote(event.getMessage()).ifPresent(cache::put);
+            Message m = event.getMessage();
+            if (m.getChannel().getIdLong() != config.channelId()) return;
+            if (config.ignoreBots() && m.getAuthor().isBot()) return;
+
+            // First: is this an attribution-only line (e.g. "-bolb") that should
+            // attach to the most recent unattributed quote? The pairing window
+            // only spans the immediately-following message, so we check before
+            // running normal quote parsing.
+            String pending = pendingUnattributedId;
+            if (pending != null) {
+                Optional<String> attrOnly = parser.parseAttributionOnly(m.getContentDisplay());
+                if (attrOnly.isPresent()) {
+                    cache.setAttribution(pending, attrOnly);
+                    pendingUnattributedId = null;
+                    return;
+                }
+            }
+
+            // Otherwise: try to parse as a quote. Anything else closes the window.
+            Optional<Quote> q = tryBuildQuote(m);
+            if (q.isPresent()) {
+                cache.put(q.get());
+                pendingUnattributedId = q.get().attribution().isEmpty() ? q.get().id() : null;
+            } else {
+                pendingUnattributedId = null;
+            }
         }
 
         @Override

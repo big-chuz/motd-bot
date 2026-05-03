@@ -45,6 +45,27 @@ public final class QuoteParser {
         this.config = config;
     }
 
+    /**
+     * Returns the attribution name if {@code raw} is *only* an attribution line
+     * (e.g. {@code "-bolb"}, {@code "— Harri"}). Used to pair the next message
+     * after an unattributed quote with that quote's author.
+     *
+     * Aliases are applied to the result.
+     */
+    public Optional<String> parseAttributionOnly(String raw) {
+        if (raw == null) return Optional.empty();
+        String text = stripDiscordNoise(raw).strip();
+        if (text.isEmpty() || text.length() > 50) return Optional.empty();
+        // Single-line, dash-prefixed, short. The length cap rejects things like
+        // "- this is some other thought I had" while keeping real attributions.
+        if (text.indexOf('\n') >= 0) return Optional.empty();
+        Matcher m = ATTRIBUTION_LINE.matcher(text);
+        if (!m.matches()) return Optional.empty();
+        String cleaned = cleanAttribution(m.group(1));
+        if (cleaned.isBlank() || cleaned.length() > 30) return Optional.empty();
+        return Optional.of(config.aliasFor(cleaned).orElse(cleaned));
+    }
+
     public ParsedQuote parse(String raw) {
         if (raw == null) return ParsedQuote.empty();
         String text = stripDiscordNoise(raw).strip();

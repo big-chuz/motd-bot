@@ -13,8 +13,18 @@ public final class QuoteCache {
         byId.put(quote.id(), quote);
     }
 
+    /** Re-write the attribution on an existing cached quote, if it's still present. */
+    public void setAttribution(String id, java.util.Optional<String> attribution) {
+        byId.computeIfPresent(id, (k, existing) ->
+                new Quote(existing.id(), existing.text(), attribution));
+    }
+
     public void remove(String id) {
         byId.remove(id);
+    }
+
+    public Optional<Quote> get(String id) {
+        return Optional.ofNullable(byId.get(id));
     }
 
     public void clear() {
